@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head><title>Audio Engine</title></head>
+<body>
+  <script>
+    let mediaRecorder;
+    let audioChunks = [];
+    let activeStreams = [];
+
+    window.electronAPI.onStartRecording(async (event, screenId) => {
+      audioChunks = [];
+      
+      try {
+        // 1. Get Microphone
+        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        activeStreams.push(micStream);
+
+        // 2. Get System Audio (Requires passing the desktop source ID on Windows)
+        const sysStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: screenId }
+          },
+          video: {
+            mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: screenId }
+          }
+        });
+        activeStreams.push(sysStream);
+
+        // 3. Mix the streams together
+        const audioCtx = new AudioContext();
+        const dest = audioCtx.createMediaStreamDestination();
+        
+        audioCtx.createMediaStreamSource(micStream).connect(dest);
+        
+        // System stream includes a dummy video track on Windows, filter for audio
+        if (sysStream.getAudioTracks().length > 0) {
+          audioCtx.createMediaStreamSource(sysStream).connect(dest);
+        }
+
+        // 4. Record
+        mediaRecorder = new MediaRecorder(dest.stream, { mimeType: 'audio/webm' });
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) audioChunks.push(e.data);
+        };
+        
+        mediaRecorder.onstop = async () => {
+          const blob = new Blob(audioChunks, { type: 'audio/webm' });
+          const arrayBuffer = await blob.arrayBuffer();
+          window.electronAPI.saveAudio(arrayBuffer);
+          
+          // Cleanup tracks
+          activeStreams.forEach(stream => stream.getTracks().forEach(track => track.stop()));
+          activeStreams = [];
+        };
+
+        mediaRecorder.start();
+      } catch (err) {
+        console.error("Failed to start recording:", err);
+      }
+    });
+
+    window.electronAPI.onStopRecording(() => {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+    });
+  </script>
+</body>
+</html>
